@@ -1,67 +1,59 @@
 package com.sciarticles.manager.service;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.sciarticles.manager.dto.UserDto;
 import com.sciarticles.manager.model.UserRequest;
-import com.sciarticles.manager.security.JwtUtil;
 import lombok.RequiredArgsConstructor;
-import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
-import reactor.core.scheduler.Schedulers;
 
 @Service
 @RequiredArgsConstructor
 public class AuthService {
 
     private final WebClient webClient;
-    private final PasswordEncoder passwordEncoder;
-    private final JwtUtil jwtUtil;
-    private final ObjectMapper objectMapper;
 
+    @Value("${auth.url}")
+    private String supabaseUrl;
+    @Value("${auth.url-login}")
+    private String loginUrl;
 
+    @Value("${supabase.api-key}")
+    private String supabaseApiKey;
+
+    /**
+     * Rejestracja użytkownika przez Supabase Auth API.
+     */
     public Mono<Void> register(UserRequest request) {
-        String hashedPassword = passwordEncoder.encode(request.getPassword());
-
-        UserDto newUser = new UserDto(request.getEmail(), hashedPassword, request.getRole());
-
         return webClient.post()
-                .uri("/users")
-                .bodyValue(newUser)
-                .exchangeToMono(response -> {
-                    if (response.statusCode().is2xxSuccessful()) {
-                        return Mono.just("User registered successfully");
-                    } else {
-                        // Odczytaj ciało błędu z Supabase
-                        return response.bodyToMono(String.class)
-                                .flatMap(errorBody -> {
-                                    // Możesz też zalogować błąd:
-                                    System.err.println("Supabase error: " + errorBody);
-
-                                    // Rzuć wyjątek z tekstem błędu (lub zwróć w inny sposób)
-                                    return Mono.error(new RuntimeException("Supabase error: " + errorBody));
-                                });
-                    }
-                }).then();
-    }
-    public Mono<String> login(UserRequest request) {
-        return webClient.get()
-                .uri(uriBuilder -> uriBuilder
-                        .path("/users")
-                        .queryParam("email", "eq." + request.getEmail())
-                        .build())
+                .uri(supabaseUrl)
+                .header("apikey", supabaseApiKey)
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(request)
                 .retrieve()
-                .bodyToFlux(UserDto.class)
-                .next()
-                .switchIfEmpty(Mono.error(new RuntimeException("User not found")))
-                .flatMap(user -> {
-                    if (passwordEncoder.matches(request.getPassword(), user.getPassword())) {
-                        return Mono.fromCallable(() -> jwtUtil.generateToken(user.getEmail()))
-                                .subscribeOn(Schedulers.boundedElastic());
-                    } else {
-                        return Mono.error(new RuntimeException("Invalid credentials"));
-                    }
-                });
+                .bodyToMono(Void.class);
+    }
+
+    /**
+     * Logowanie użytkownika przez Supabase Auth API - zwraca token JWT.
+     */
+    public Mono<String> login(UserRequest request) {
+        return webClient.post()
+                .uri(loginUrl)
+                .header("apikey", supabaseApiKey)
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(request)
+                .retrieve()
+                .bodyToMono(LoginResponse.class)
+                .map(resp ->  resp.access_token);
+    }
+
+    /**
+     * Klasa do deserializacji odpowiedzi z Supabase Auth po logowaniu.
+     */
+    private static class LoginResponse {
+        public String access_token;
     }
 }

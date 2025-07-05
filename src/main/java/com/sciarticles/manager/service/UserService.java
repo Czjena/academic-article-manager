@@ -37,4 +37,15 @@ public class UserService {
                 .next()
                 .map(user -> UUID.fromString(user.getId()));
     }
+    public Mono<String> getRoleByEmail(String email) {
+        return webClient.get()
+                .uri(uriBuilder -> uriBuilder
+                        .path("/users")
+                        .queryParam("email", "eq." + email)
+                        .build())
+                .retrieve()
+                .bodyToFlux(UserDto.class)
+                .next()
+                .map(UserDto::getRole);
+    }
 }

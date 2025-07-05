@@ -1,16 +1,16 @@
 package com.sciarticles.manager.controller;
 
 import com.sciarticles.manager.dto.ArticleDto;
-import com.sciarticles.manager.dto.ReviewAssignmentDto;
+import com.sciarticles.manager.enums.ArticleStatus;
 import com.sciarticles.manager.service.*;
 import lombok.RequiredArgsConstructor;
-import org.apache.tomcat.util.http.parser.Authorization;
+
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
-import org.springframework.security.core.Authentication;
+
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.*;
@@ -80,47 +80,42 @@ public class ArticleController {
         return ResponseEntity.ok(article);
     }
 
-    @PostMapping("/{articleId}/assign-reviewer/{reviewerId}")
-    public Mono<ResponseEntity<ReviewAssignmentDto>> assignReviewer(
-            @PathVariable UUID articleId,
-            @PathVariable UUID reviewerId,
-            @AuthenticationPrincipal Jwt jwt
-    ) {
-        String currentUserJwt = (String) ((org.springframework.security.oauth2.jwt.Jwt) jwt).getTokenValue();
-
-        return assignReviewer.assign(articleId, reviewerId, currentUserJwt)
-                .map(ResponseEntity::ok)
-                .onErrorResume(e -> {
-                    if (e instanceof IllegalAccessException) {
-                        return Mono.just(ResponseEntity.status(HttpStatus.FORBIDDEN).build());
-                    }
-                    return Mono.just(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build());
-                });
-    }
-
     @PostMapping
-    public ResponseEntity<?> createArticle(@RequestBody ArticleDto articleDto,
-                                           Authentication authentication) {
-        try {
-
-            String email = (String) authentication.getPrincipal();
-
-            UUID userId = userService.getUserIdByEmail(email).block();
-
-            if (userId == null) {
-                return ResponseEntity.badRequest()
-                        .body(Map.of("error", "User with email " + email + " not found"));
-            }
-
-            articleDto.setSubmittedBy(userId);
-            ArticleDto created = articleService.createArticle(articleDto).block();
-
-            return ResponseEntity.status(HttpStatus.CREATED).body(created);
-        } catch (Exception e) {
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(Map.of("error", e.getMessage()));
+    public Mono<ResponseEntity<?>> createArticle(@RequestBody ArticleDto articleDto,
+                                                 @AuthenticationPrincipal Jwt jwt) {
+        if (jwt == null) {
+            return Mono.just(ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(Map.of("error", "Unauthorized")));
         }
+
+        String email = jwt.getClaimAsString("email");
+
+        return userService.getRoleByEmail(email)
+                .flatMap(role -> {
+                    if (!(role.equalsIgnoreCase("author") ||  role.equalsIgnoreCase("reviewer") || role.equalsIgnoreCase("admin"))) {
+                        return Mono.just(ResponseEntity.status(HttpStatus.FORBIDDEN)
+                                .body(Map.of("error", "Forbidden: insufficient permissions")));
+                    }
+
+                    return userService.getUserIdByEmail(email)
+                            .flatMap(userId -> {
+                                if (userId == null) {
+                                    return Mono.just(ResponseEntity.badRequest()
+                                            .body(Map.of("error", "User with email " + email + " not found")));
+                                }
+
+                                articleDto.setSubmittedBy(userId);
+                                return articleService.createArticle(articleDto)
+                                        .map(created -> ResponseEntity.status(HttpStatus.CREATED).body(created));
+                            });
+                })
+                .onErrorResume(e ->
+                        Mono.just(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                                .body(Map.of("error", e.getMessage())))
+                );
     }
+
+
 
     @DeleteMapping("/{id}")
     public ResponseEntity<Void> deleteArticle(@PathVariable UUID id) {
@@ -136,24 +131,27 @@ public class ArticleController {
     String serviceKey = "${service.role-key}";
 
     @PostMapping("/upload")
-    public ResponseEntity<?> uploadFile(@RequestParam("file") MultipartFile file, Authentication authentication) {
+    public ResponseEntity<?> uploadFile(@RequestParam("file") MultipartFile file,
+                                        @AuthenticationPrincipal Jwt jwt){
         try {
-            String email = (String) authentication.getPrincipal();
-            UUID userId = userService.getUserIdByEmail(email).block();
 
-            if (userId == null) {
-                return ResponseEntity.badRequest()
-                        .body(Map.of("error", "User with email " + email + " not found"));
+            if(jwt == null) {
+                return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                .body(Map.of("error","Unauthorizied"));
+
             }
 
-            System.out.println(serviceKey);
+            String email = jwt.getClaimAsString("email");
+            UUID userId = userService.getUserIdByEmail(email).block();
+
+
             String originalFileName = file.getOriginalFilename();
             String uploadUrl = String.format("https://bgbnastkfzfpvfdkfjsc.supabase.co/storage/v1/object/pdf/%s", originalFileName);
 
 
             WebClient webClient = WebClient.builder()
                     .baseUrl(uploadUrl)
-                    .defaultHeader(HttpHeaders.AUTHORIZATION,   serviceKey)  // bez "Bearer "
+                    .defaultHeader(HttpHeaders.AUTHORIZATION, serviceKey)
                     .build();
 
             webClient.post()
@@ -180,7 +178,12 @@ public class ArticleController {
                     .body(Map.of("error", "Upload failed: " + e.getMessage()));
         }
     }
-
-
+    @PatchMapping("/{articleId}/status")
+    public Mono<ResponseEntity<Void>> updateStatus(@PathVariable UUID articleId,
+                                                   @RequestParam ArticleStatus status) {
+        return articleService.changeArticleStatus(articleId, status)
+                .then(Mono.defer(() -> Mono.just(ResponseEntity.noContent().<Void>build())))
+                .onErrorResume(e -> Mono.just(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build()));
+    }
 }
 

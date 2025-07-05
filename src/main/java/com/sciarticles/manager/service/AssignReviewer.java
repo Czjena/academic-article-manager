@@ -26,7 +26,6 @@ public class AssignReviewer {
 
         return supabaseWebClient.post()
                 .uri("/review_assignments")
-                .header("Authorization", "Bearer " + jwtToken)   // dodaj nagłówek z tokenem
                 .bodyValue(data)
                 .exchangeToMono(response -> {
                     if (response.statusCode().is2xxSuccessful()) {

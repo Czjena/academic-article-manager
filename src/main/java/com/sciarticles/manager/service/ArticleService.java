@@ -2,6 +2,7 @@ package com.sciarticles.manager.service;
 
 import com.sciarticles.manager.dto.ArticleDto;
 
+import com.sciarticles.manager.enums.ArticleStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
@@ -73,4 +74,18 @@ public class ArticleService {
                 .retrieve()
                 .bodyToMono(Void.class);
     }
+    // Zmien status
+    public Mono<Void> changeArticleStatus(UUID articleId, ArticleStatus newStatus) {
+        return webClient.patch()
+                .uri(uriBuilder -> uriBuilder
+                        .path("/articles")
+                        .queryParam("id", "eq." + articleId)
+                        .build())
+                .bodyValue(new StatusUpdateRequest(newStatus))
+                .retrieve()
+                .bodyToMono(Void.class);
+    }
+
+    private record StatusUpdateRequest(ArticleStatus status) {}
 }
+

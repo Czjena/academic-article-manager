@@ -1,12 +1,15 @@
 package com.sciarticles.manager.controller;
 
-import com.sciarticles.manager.dto.TestDto;
 import com.sciarticles.manager.service.TestService;
+
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RestController;
-import reactor.core.publisher.Mono;
 
-import java.util.List;
+import java.util.Map;
 
 @RestController
 public class TestController {
@@ -17,8 +20,12 @@ public class TestController {
         this.testService = testService;
     }
 
-    @GetMapping("/tests")
-    public Mono<List<TestDto>> getAllTests() {
-        return testService.getAllTests();
+    @GetMapping("/me")
+    public ResponseEntity<Map<String, Object>> getCurrentUser(@AuthenticationPrincipal Jwt jwt) {
+        if (jwt == null) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+        }
+        String email = (String) jwt.getClaims().get("email");
+        return ResponseEntity.ok(Map.of("email", email));
     }
-}
+    }

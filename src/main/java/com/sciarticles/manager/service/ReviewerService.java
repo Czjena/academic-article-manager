@@ -1,54 +1,43 @@
 package com.sciarticles.manager.service;
 
-import com.sciarticles.manager.dto.ReviewerDto;
 import lombok.RequiredArgsConstructor;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.http.HttpHeaders;
+
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
 
-import java.util.Arrays;
-import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 @Service
 @RequiredArgsConstructor
 public class ReviewerService {
 
-    @Value("${supabase.url}")
-    private String supabaseUrl;
+    private final WebClient webClient;
 
-    @Value("${supabase.api-key}")
-    private String apiKey;
 
-    private WebClient getClient() {
-        return WebClient.builder()
-                .baseUrl(supabaseUrl + "/rest/v1/reviewers")
-                .defaultHeader(HttpHeaders.AUTHORIZATION, "Bearer " + apiKey)
-                .defaultHeader("apikey", apiKey)
-                .defaultHeader("Content-Type", "application/json")
-                .build();
-    }
-
-    public Mono<ReviewerDto> addReviewer(ReviewerDto dto) {
-        return getClient().post()
-                .bodyValue(dto)
+    // 1. Nadaj rolę reviewer użytkownikowi po jego ID
+    public Mono<Void> addReviewerRoleToUser(UUID userId) {
+        return webClient.patch()
+                .uri(uriBuilder -> uriBuilder.path("/users").queryParam("id", "eq." + userId.toString()).build())
+                .bodyValue(Map.of("role", "reviewer"))
                 .retrieve()
-                .bodyToMono(ReviewerDto[].class)
-                .map(response -> response[0]);
+                .bodyToMono(Void.class);
     }
 
-    public Mono<List<ReviewerDto>> getAllReviewers() {
-        return getClient().get()
-                .retrieve()
-                .bodyToMono(ReviewerDto[].class)
-                .map(Arrays::asList);
-    }
+    // 2. Przypisz reviewera do artykułu
+    public Mono<Void> assignReviewerToArticle(UUID articleId, UUID reviewerId) {
+        Map<String, Object> body = Map.of(
+                "article_id", articleId.toString(),
+                "reviewer_id", reviewerId.toString(),
+                "status", "assigned"
+        );
 
-    public Mono<Void> deleteReviewer(UUID id) {
-        return getClient().delete()
-                .uri(uriBuilder -> uriBuilder.queryParam("id", "eq." + id).build())
+        return webClient.post()
+                .uri(uriBuilder -> uriBuilder
+                        .path("/review_assignments")
+                        .build())
+                .bodyValue(body)
                 .retrieve()
                 .bodyToMono(Void.class);
     }

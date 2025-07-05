@@ -23,9 +23,8 @@ public class AssignReviewerService {
         );
 
         return webClient.post()
-                .uri("/rest/v1/review_assignments")
+                .uri("review_assignments")
                 .header("apikey", serviceRoleKey)
-                .header("Authorization", "Bearer " + serviceRoleKey)
                 .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
                 .bodyValue(body)
                 .retrieve()
