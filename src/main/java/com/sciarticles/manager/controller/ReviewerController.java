@@ -1,10 +1,10 @@
 package com.sciarticles.manager.controller;
 
-import com.sciarticles.manager.dto.ReviewerDto;
+
 import com.sciarticles.manager.security.VerifyRole;
 import com.sciarticles.manager.service.AssignReviewerService;
 import com.sciarticles.manager.service.ReviewerService;
-import com.sciarticles.manager.service.UserService;
+
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;

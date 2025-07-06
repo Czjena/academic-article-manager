@@ -1,7 +1,9 @@
 package com.sciarticles.manager.controller;
 
 import com.sciarticles.manager.dto.ArticleDto;
+import com.sciarticles.manager.dto.CreateArticleDto;
 import com.sciarticles.manager.enums.ArticleStatus;
+import com.sciarticles.manager.security.VerifyRole;
 import com.sciarticles.manager.service.*;
 import lombok.RequiredArgsConstructor;
 
@@ -14,8 +16,8 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.*;
-import org.springframework.web.multipart.MultipartFile;
-import org.springframework.web.reactive.function.client.WebClient;
+
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.util.List;
@@ -30,9 +32,10 @@ public class ArticleController {
     private final ArticleService articleService;
 
     private final UpdateArticlePatch updateArticlePatch;
-    private final AssignReviewer assignReviewer;
-    private final ReviewAssignmentService reviewAssignmentService;
     private final UserService userService;
+    private final VerifyRole verifyRole;
+    private final ArticleExportService exportService;
+
 
     @PatchMapping("/{id}")
     public Mono<ResponseEntity<ArticleDto>> UpdateArticlePatch(
@@ -65,6 +68,14 @@ public class ArticleController {
         }
         return ResponseEntity.ok(articles);
     }
+    @PutMapping("/articles/{id}")
+    public Mono<ResponseEntity<Void>> updateArticleText(
+            @PathVariable UUID id,
+            @RequestBody Map<String, String> updates) {
+        String newText = updates.get("text");
+        return articleService.updateArticleTextInDb(id, newText)
+                .thenReturn(ResponseEntity.noContent().build());
+    }
 
     @GetMapping("/{id}")
     public ResponseEntity<ArticleDto> getArticleById(@PathVariable UUID id) {
@@ -79,10 +90,72 @@ public class ArticleController {
         }
         return ResponseEntity.ok(article);
     }
+    @GetMapping("/filter")
+    public Mono<ResponseEntity<List<ArticleDto>>> getFilteredArticles(
+            @RequestParam(required = false) String title,
+            @RequestParam(required = false) String authors,
+            @RequestParam(required = false) String keywords,
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) String category
+    ) {
+        return articleService.getFilteredArticles(title, authors, keywords, status, category)
+                .collectList()
+                .map(ResponseEntity::ok)
+                .onErrorResume(e -> Mono.just(ResponseEntity.status(500).build()));
+    }
+    @GetMapping("/articles/accepted")
+    public Flux<ArticleDto> getAcceptedArticles(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "10") int size,
+            @RequestParam(defaultValue = "id") String sortBy,
+            @RequestParam(defaultValue = "asc") String sortDir) {
+        return articleService.findAcceptedArticlesPagedSorted(page, size, sortBy, sortDir);
+    }
+
+    @PostMapping("/articles/{id}/reject")
+    public Mono<ResponseEntity<Object>> rejectArticle(
+            @PathVariable UUID id,
+            @AuthenticationPrincipal Jwt jwt) {
+        return verifyRole.checkRoles(jwt, "supervisor")
+                .flatMap(authError -> Mono.just(authError))
+                .switchIfEmpty(
+                        articleService.rejectArticle(id)
+                                .map(a -> ResponseEntity.<Object>ok(Map.of("message", "Artykuł odrzucony")))
+                                .defaultIfEmpty(ResponseEntity.notFound().build())
+                                .onErrorResume(e -> Mono.just(ResponseEntity.status(500).build()))
+                );
+    }
+
+
+    @PostMapping("/articles/{id}/approve")
+    public Mono<ResponseEntity<Object>> approveArticle(
+            @PathVariable UUID id,
+            @AuthenticationPrincipal Jwt jwt) {
+        return verifyRole.checkRoles(jwt, "supervisor")
+                .flatMap(authError -> Mono.just(authError))
+                .switchIfEmpty(
+                        articleService.approveArticle(id)
+                                .map(resultString -> ResponseEntity.<Object>ok(Map.of("message", "Artykuł zatwierdzony", "result", resultString)))
+                                .defaultIfEmpty(ResponseEntity.notFound().build())
+                                .onErrorResume(e -> Mono.just(ResponseEntity.status(500).build()))
+                );
+    }
+
+    @GetMapping("/export/pdf")
+    public Mono<ResponseEntity<byte[]>> exportArticlesPdf() {
+        return articleService.getAllArticles() // przyjmuję, że masz taki serwis zwracający Mono<List<ArticleDto>>
+                .flatMap(exportService::exportArticlesToPdf)
+                .map(pdfBytes -> ResponseEntity.ok()
+                        .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=articles.pdf")
+                        .contentType(MediaType.APPLICATION_PDF)
+                        .body(pdfBytes));
+    }
 
     @PostMapping
-    public Mono<ResponseEntity<?>> createArticle(@RequestBody ArticleDto articleDto,
-                                                 @AuthenticationPrincipal Jwt jwt) {
+    public Mono<ResponseEntity<Map<String, String>>> createArticle(
+            @RequestBody CreateArticleDto dto,
+            @AuthenticationPrincipal Jwt jwt) {
+
         if (jwt == null) {
             return Mono.just(ResponseEntity.status(HttpStatus.UNAUTHORIZED)
                     .body(Map.of("error", "Unauthorized")));
@@ -90,32 +163,33 @@ public class ArticleController {
 
         String email = jwt.getClaimAsString("email");
 
-        return userService.getRoleByEmail(email)
-                .flatMap(role -> {
-                    if (!(role.equalsIgnoreCase("author") ||  role.equalsIgnoreCase("reviewer") || role.equalsIgnoreCase("admin"))) {
-                        return Mono.just(ResponseEntity.status(HttpStatus.FORBIDDEN)
-                                .body(Map.of("error", "Forbidden: insufficient permissions")));
-                    }
+        return userService.getUserIdByEmail(email)
+                .flatMap(userId -> {
+                    ArticleDto fullDto = ArticleDto.builder()
+                            .title(dto.getTitle())
+                            .authors(dto.getAuthors())
+                            .abstractText(dto.getAbstractText())
+                            .keywords(dto.getKeywords())
+                            .category(dto.getCategory())
+                            .submitted_by(userId) // 👈 tutaj przypisujesz użytkownika
+                            .build();
 
-                    return userService.getUserIdByEmail(email)
-                            .flatMap(userId -> {
-                                if (userId == null) {
-                                    return Mono.just(ResponseEntity.badRequest()
-                                            .body(Map.of("error", "User with email " + email + " not found")));
-                                }
-
-                                articleDto.setSubmittedBy(userId);
-                                return articleService.createArticle(articleDto)
-                                        .map(created -> ResponseEntity.status(HttpStatus.CREATED).body(created));
-                            });
-                })
-                .onErrorResume(e ->
-                        Mono.just(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                                .body(Map.of("error", e.getMessage())))
-                );
+                    return articleService.createArticle(fullDto)
+                            .map(created -> ResponseEntity.status(HttpStatus.CREATED)
+                                    .body(Map.of("id", created.getId().toString())));
+                });
     }
 
-
+    @GetMapping("/statistics")
+    public Mono<ResponseEntity<Object>> getStatistics() {
+        return articleService.getArticleStatistics()
+                .map(stats -> ResponseEntity.ok((Object) stats))
+                .defaultIfEmpty(ResponseEntity.noContent().build())
+                .onErrorResume(e -> {
+                    Map<String, String> error = Map.of("error", e.getMessage());
+                    return Mono.just(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(error));
+                });
+    }
 
     @DeleteMapping("/{id}")
     public ResponseEntity<Void> deleteArticle(@PathVariable UUID id) {
@@ -130,54 +204,7 @@ public class ArticleController {
     @Value("${service.role-key}")
     String serviceKey = "${service.role-key}";
 
-    @PostMapping("/upload")
-    public ResponseEntity<?> uploadFile(@RequestParam("file") MultipartFile file,
-                                        @AuthenticationPrincipal Jwt jwt){
-        try {
 
-            if(jwt == null) {
-                return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
-                .body(Map.of("error","Unauthorizied"));
-
-            }
-
-            String email = jwt.getClaimAsString("email");
-            UUID userId = userService.getUserIdByEmail(email).block();
-
-
-            String originalFileName = file.getOriginalFilename();
-            String uploadUrl = String.format("https://bgbnastkfzfpvfdkfjsc.supabase.co/storage/v1/object/pdf/%s", originalFileName);
-
-
-            WebClient webClient = WebClient.builder()
-                    .baseUrl(uploadUrl)
-                    .defaultHeader(HttpHeaders.AUTHORIZATION, serviceKey)
-                    .build();
-
-            webClient.post()
-                    .contentType(MediaType.parseMediaType(file.getContentType()))
-                    .bodyValue(file.getBytes())
-                    .retrieve()
-                    .onStatus(status -> status.isError(),
-                            clientResponse -> clientResponse.bodyToMono(String.class)
-                                    .flatMap(errorBody -> Mono.error(new RuntimeException("Supabase error "
-                                            + clientResponse.statusCode() + ": " + errorBody))))
-                    .bodyToMono(Void.class)
-                    .block();
-
-            String publicUrl = String.format("https://bgbnastkfzfpvfdkfjsc.supabase.co/storage/v1/object/public/pdf/%s", originalFileName);
-
-            return ResponseEntity.ok(Map.of(
-                    "message", "File uploaded successfully",
-                    "fileUrl", publicUrl,
-                    "uploadedByUserId", userId.toString()
-            ));
-        } catch (Exception e) {
-            e.printStackTrace();
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(Map.of("error", "Upload failed: " + e.getMessage()));
-        }
-    }
     @PatchMapping("/{articleId}/status")
     public Mono<ResponseEntity<Void>> updateStatus(@PathVariable UUID articleId,
                                                    @RequestParam ArticleStatus status) {
