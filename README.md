@@ -75,12 +75,12 @@ VerifyRole – verifies if JWT contains necessary role (admin)
 Add your Supabase service role key in your application-secret.properties.yml:
 
 supabase.url
-supabase.api-key
-JWT_SECRET
-service.role-key
-articles.file_url
-auth.url=
-auth.url-login
+,supabase.api-key
+,JWT_SECRET
+,service.role-key
+,articles.file_url
+,auth.url
+,auth.url-login
 
 ⚠️ Never commit application-secret.yml to version control.
 
