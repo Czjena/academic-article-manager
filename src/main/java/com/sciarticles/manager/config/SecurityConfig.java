@@ -63,7 +63,11 @@ public class SecurityConfig {
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration corsConfig = new CorsConfiguration();
-        corsConfig.setAllowedOrigins(Arrays.asList("http://localhost:3000"));
+        // frontend dev + produkcja
+        corsConfig.setAllowedOrigins(Arrays.asList(
+                "http://localhost:3000",
+                "https://academic-article-manager-frontend.vercel.app"
+        ));
         corsConfig.setAllowedMethods(Arrays.asList("GET", "POST", "PUT", "DELETE", "OPTIONS"));
         corsConfig.setAllowedHeaders(Arrays.asList("*"));
         corsConfig.setAllowCredentials(true);
